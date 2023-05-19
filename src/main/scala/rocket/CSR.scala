@@ -124,6 +124,17 @@ class MIP(implicit p: Parameters) extends CoreBundle()(p)
   val usip = Bool()
 }
 
+class Envcfg extends Bundle {
+  val stce = Bool()
+  val pbmte = Bool()
+  val zero54 = UInt(54.W)
+  val cbze = Bool()
+  val cbcfe = Bool()
+  val cbie = UInt(2.W)
+  val zero3 = UInt(3.W)
+  val fiom = Bool()
+}
+
 class PTBR(implicit p: Parameters) extends CoreBundle()(p) {
   def additionalPgLevels = mode.extract(log2Ceil(pgLevels-minPgLevels+1)-1, 0)
   def pgLevelsToMode(i: Int) = (xLen, i) match {
@@ -287,6 +298,7 @@ class CSRFileIO(implicit p: Parameters) extends CoreBundle
   val trace = Output(Vec(retireWidth, new TracedInstruction))
   val mcontext = Output(UInt(coreParams.mcontextWidth.W))
   val scontext = Output(UInt(coreParams.scontextWidth.W))
+  val fiom = Output(Bool())
 
   val vector = usingVector.option(new Bundle {
     val vconfig = Output(new VConfig())
@@ -493,6 +505,10 @@ class CSRFile(
   val reg_rnmie = RegInit(true.B)
   val nmie = reg_rnmie
 
+  val reg_menvcfg = RegInit(0.U.asTypeOf(new Envcfg))
+  val reg_senvcfg = RegInit(0.U.asTypeOf(new Envcfg))
+  val reg_henvcfg = RegInit(0.U.asTypeOf(new Envcfg))
+
   val delegable_counters = ((BigInt(1) << (nPerfCounters + CSR.firstHPM)) - 1).U
   val (reg_mcounteren, read_mcounteren) = {
     val reg = Reg(UInt(32.W))
@@ -589,6 +605,7 @@ class CSRFile(
   io.bp := reg_bp take nBreakpoints
   io.mcontext := reg_mcontext.getOrElse(0.U)
   io.scontext := reg_scontext.getOrElse(0.U)
+  io.fiom := (reg_mstatus.prv < PRV.M.U && reg_menvcfg.fiom) || (reg_mstatus.prv < PRV.S.U && reg_senvcfg.fiom) || (reg_mstatus.v && reg_henvcfg.fiom)
   io.pmp := reg_pmp.map(PMP(_))
 
   val isaMaskString =
@@ -688,6 +705,13 @@ class CSRFile(
 
     if (usingUser) {
       read_mapping += CSRs.mcounteren -> read_mcounteren
+      read_mapping += CSRs.menvcfg -> reg_menvcfg.asUInt
+      read_mapping += CSRs.senvcfg -> reg_senvcfg.asUInt
+      read_mapping += CSRs.henvcfg -> reg_henvcfg.asUInt
+      if (xLen == 32) {
+        read_mapping += CSRs.menvcfgh -> (reg_menvcfg.asUInt >> 32)
+        read_mapping += CSRs.henvcfgh -> (reg_henvcfg.asUInt >> 32)
+      }
     }
     read_mapping += CSRs.cycle -> reg_cycle
     read_mapping += CSRs.instret -> reg_instret
@@ -1381,6 +1405,10 @@ class CSRFile(
     }
     if (usingUser) {
       when (decoded_addr(CSRs.mcounteren)) { reg_mcounteren := wdata }
+      // Currently only FIOM in envcfg is writable
+      when (decoded_addr(CSRs.menvcfg))    { reg_menvcfg.fiom := wdata(0) }
+      when (decoded_addr(CSRs.senvcfg))    { reg_senvcfg.fiom := wdata(0) }
+      when (decoded_addr(CSRs.henvcfg))    { reg_henvcfg.fiom := wdata(0) }
     }
     if (nBreakpoints > 0) {
       when (decoded_addr(CSRs.tselect)) { reg_tselect := wdata }
